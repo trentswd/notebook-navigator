@@ -32,6 +32,9 @@ export class DetachedListPaneService {
     private geometryTimer: number | null = null;
     private geometryAttempts = 0;
     private disposed = false;
+    private preferredListWidth: number | null = null;
+    private hostWindow: Window | null = null;
+    private readonly handlePointerUp = (): void => this.captureCurrentListWidth();
     private expandedGeometry: {
         width: string;
         minWidth: string;
@@ -66,6 +69,8 @@ export class DetachedListPaneService {
         }
         this.workspaceObserver?.disconnect();
         this.workspaceObserver = null;
+        this.hostWindow?.removeEventListener('pointerup', this.handlePointerUp, true);
+        this.hostWindow = null;
         this.listeners.clear();
         if (this.geometryTimer !== null) {
             window.clearTimeout(this.geometryTimer);
@@ -95,6 +100,9 @@ export class DetachedListPaneService {
         this.host = host;
         this.tabsContainer = tabsContainer;
         tabsContainer?.classList.add('nn-detached-list-workspace-tabs');
+        this.hostWindow?.removeEventListener('pointerup', this.handlePointerUp, true);
+        this.hostWindow = host.ownerDocument.defaultView;
+        this.hostWindow?.addEventListener('pointerup', this.handlePointerUp, true);
         this.notifyHostListeners();
         this.configureGeometry();
         this.syncVisibility();
@@ -113,6 +121,8 @@ export class DetachedListPaneService {
             'nn-detached-list-pane-collapsed',
             'nn-detached-list-pane-inactive'
         );
+        this.hostWindow?.removeEventListener('pointerup', this.handlePointerUp, true);
+        this.hostWindow = null;
         this.host = null;
         this.tabsContainer = null;
         this.expandedGeometry = null;
@@ -234,17 +244,28 @@ export class DetachedListPaneService {
             leftSplitEl.setCssProps({ width: `${Math.round(this.navigationWidth)}px` });
         }
 
-        if (this.createdLeafThisSession) {
-            const capturedListWidth =
-                this.originalCombinedWidth === null
+        if (this.preferredListWidth === null) {
+            const inlineWidth = Number.parseFloat(this.tabsContainer.style.width);
+            const actualWidth = this.tabsContainer.getBoundingClientRect().width;
+            const capturedListWidth = this.createdLeafThisSession
+                ? this.originalCombinedWidth === null
                     ? DEFAULT_LIST_WIDTH
-                    : Math.max(MIN_LIST_WIDTH, this.originalCombinedWidth - this.navigationWidth);
-            const targetWidth = this.setInitialListWidth(capturedListWidth);
+                    : Math.max(MIN_LIST_WIDTH, this.originalCombinedWidth - this.navigationWidth)
+                : inlineWidth >= MIN_LIST_WIDTH
+                  ? inlineWidth
+                  : actualWidth >= MIN_LIST_WIDTH
+                    ? actualWidth
+                    : DEFAULT_LIST_WIDTH;
+            this.preferredListWidth = Math.round(capturedListWidth);
+        }
+
+        const targetWidth = this.setFixedListWidth(this.preferredListWidth);
+        if (this.createdLeafThisSession) {
             this.scheduleGeometryVerification(targetWidth);
         }
     }
 
-    private setInitialListWidth(requestedWidth: number): number {
+    private setFixedListWidth(requestedWidth: number): number {
         const tabsContainer = this.tabsContainer;
         const rootSplit = tabsContainer?.parentElement;
         if (!tabsContainer || !rootSplit) {
@@ -253,26 +274,34 @@ export class DetachedListPaneService {
 
         const availableWidth = rootSplit.getBoundingClientRect().width;
         const targetWidth = Math.min(requestedWidth, Math.max(MIN_LIST_WIDTH, availableWidth - MIN_EDITOR_WIDTH));
-        let siblingFlexGrow = 0;
-        for (const child of rootSplit.children) {
-            if (child === tabsContainer || !child.instanceOf(HTMLElement) || !child.classList.contains('workspace-tabs')) {
-                continue;
-            }
-            siblingFlexGrow += Number.parseFloat(activeWindow.getComputedStyle(child).flexGrow) || 0;
-        }
-
-        if (siblingFlexGrow <= 0 || availableWidth <= targetWidth) {
-            tabsContainer.setCssProps({ width: `${Math.round(targetWidth)}px` });
-            return targetWidth;
-        }
-
-        const targetFlexGrow = (targetWidth * siblingFlexGrow) / (availableWidth - targetWidth);
         this.setTabsCssProps({
-            width: '',
-            'flex-grow': targetFlexGrow.toFixed(4),
-            'flex-basis': '0px'
+            width: `${Math.round(targetWidth)}px`,
+            'min-width': `${MIN_LIST_WIDTH}px`,
+            'flex-grow': '0',
+            'flex-shrink': '0',
+            'flex-basis': `${Math.round(targetWidth)}px`
         });
         return targetWidth;
+    }
+
+    private captureCurrentListWidth(): void {
+        const tabsContainer = this.tabsContainer;
+        if (
+            !this.requestedActive ||
+            !tabsContainer ||
+            tabsContainer.classList.contains('nn-detached-list-pane-inactive') ||
+            tabsContainer.classList.contains('nn-detached-list-pane-collapsed')
+        ) {
+            return;
+        }
+
+        const width = Math.round(tabsContainer.getBoundingClientRect().width);
+        if (width < MIN_LIST_WIDTH) {
+            return;
+        }
+        this.preferredListWidth = width;
+        this.setFixedListWidth(width);
+        this.plugin.app.workspace.requestSaveLayout();
     }
 
     private scheduleGeometryVerification(targetWidth: number): void {
