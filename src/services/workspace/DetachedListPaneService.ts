@@ -343,14 +343,16 @@ export class DetachedListPaneService {
             tabsContainer.classList.contains('nn-detached-list-pane-inactive') ||
             tabsContainer.classList.contains('nn-detached-list-pane-collapsed');
 
-        if (shouldHide && !wasHidden) {
-            this.expandedGeometry = {
-                width: tabsContainer.style.width,
-                minWidth: tabsContainer.style.minWidth,
-                flexGrow: tabsContainer.style.flexGrow,
-                flexShrink: tabsContainer.style.flexShrink,
-                flexBasis: tabsContainer.style.flexBasis
-            };
+        if (shouldHide) {
+            if (!wasHidden) {
+                this.expandedGeometry = {
+                    width: tabsContainer.style.width,
+                    minWidth: tabsContainer.style.minWidth,
+                    flexGrow: tabsContainer.style.flexGrow,
+                    flexShrink: tabsContainer.style.flexShrink,
+                    flexBasis: tabsContainer.style.flexBasis
+                };
+            }
             this.setTabsCssProps({
                 width: '0px',
                 'min-width': '0px',

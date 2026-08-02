@@ -866,8 +866,11 @@ body {
     pointer-events: none;
 }
 
-.workspace-tabs.nn-detached-list-pane-inactive,
-.workspace-tabs.nn-detached-list-pane-collapsed {
+.workspace-split.mod-root > .workspace-tabs.nn-detached-list-workspace-tabs.nn-detached-list-pane-inactive,
+.workspace-split.mod-root > .workspace-tabs.nn-detached-list-workspace-tabs.nn-detached-list-pane-collapsed {
+    width: 0;
+    min-width: 0;
+    flex: 0 0 0;
     opacity: 0;
     pointer-events: none;
 }
