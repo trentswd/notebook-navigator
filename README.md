@@ -1,3 +1,18 @@
+> [!IMPORTANT]
+> **Unofficial three-column fork.** This fork was modified by
+> [trentswd](https://github.com/trentswd) on 2026-08-02 from Notebook Navigator
+> 3.3.2. It is not supported by the upstream author.
+>
+> On desktop, the horizontal dual-pane layout places the file list in a separate
+> center workspace column. Vertical dual-pane and single-pane layouts keep the
+> original sidebar behavior. Collapsing the left sidebar also collapses the new
+> file-list column.
+>
+> Install with BRAT by adding `trentswd/notebook-navigator`. The release is
+> distributed under the repository's existing GPLv3 license. Source changes are
+> available in the [`codex/three-column-patch`](https://github.com/trentswd/notebook-navigator/tree/codex/three-column-patch)
+> branch.
+
 Read in your language: [English](https://notebooknavigator.com/docs.html) • [العربية](https://notebooknavigator.com/ar/docs.html) • [Deutsch](https://notebooknavigator.com/de/docs.html) • [Español](https://notebooknavigator.com/es/docs.html) • [فارسی](https://notebooknavigator.com/fa/docs.html) • [Français](https://notebooknavigator.com/fr/docs.html) • [Bahasa Indonesia](https://notebooknavigator.com/id/docs.html) • [Italiano](https://notebooknavigator.com/it/docs.html) • [Nederlands](https://notebooknavigator.com/nl/docs.html) • [Polski](https://notebooknavigator.com/pl/docs.html) • [Português](https://notebooknavigator.com/pt/docs.html) • [Português (Brasil)](https://notebooknavigator.com/pt-br/docs.html) • [Русский](https://notebooknavigator.com/ru/docs.html) • [ไทย](https://notebooknavigator.com/th/docs.html) • [Türkçe](https://notebooknavigator.com/tr/docs.html) • [Українська](https://notebooknavigator.com/uk/docs.html) • [Tiếng Việt](https://notebooknavigator.com/vi/docs.html) • [日本語](https://notebooknavigator.com/ja/docs.html) • [한국어](https://notebooknavigator.com/ko/docs.html) • [中文简体](https://notebooknavigator.com/zh-cn/docs.html) • [中文繁體](https://notebooknavigator.com/zh-tw/docs.html)
 
 ![Notebook Navigator Screenshot](https://github.com/johansan/notebook-navigator/blob/main/images/notebook-navigator.png?raw=true)
