@@ -31,6 +31,13 @@ import type { CSSProperties } from 'react';
 export const NOTEBOOK_NAVIGATOR_VIEW = 'notebook-navigator';
 
 /**
+ * Auxiliary desktop view used by the local detached-list patch.
+ * The view only owns a workspace leaf; the actual ListPane is rendered into it
+ * through a React portal from the primary Notebook Navigator React tree.
+ */
+export const NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW = 'notebook-navigator-detached-list';
+
+/**
  * Unique identifier for the Notebook Navigator calendar view type.
  * Used by Obsidian to register and manage the right sidebar calendar view.
  */

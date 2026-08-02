@@ -108,7 +108,7 @@ interface UIStateProviderProps {
 }
 
 export function UIStateProvider({ children }: UIStateProviderProps) {
-    const { plugin } = useServices();
+    const { plugin, isMobile } = useServices();
     const settings = useSettingsState();
     const uxPreferences = useUXPreferences();
     const { setPinShortcuts } = useUXPreferenceActions();
@@ -150,6 +150,7 @@ export function UIStateProvider({ children }: UIStateProviderProps) {
         if (
             dualPane &&
             settings.dualPaneOrientation === 'horizontal' &&
+            isMobile &&
             settings.narrowSidebarLayout !== 'none' &&
             state.containerWidth !== null
         ) {
@@ -178,6 +179,7 @@ export function UIStateProvider({ children }: UIStateProviderProps) {
     }, [
         state,
         settings.dualPaneOrientation,
+        isMobile,
         settings.narrowSidebarCustomWidth,
         settings.narrowSidebarLayout,
         settings.narrowSidebarTriggerMode

@@ -29,6 +29,7 @@ import { supportsKeyboardInteractions } from '../utils/paneLayout';
 interface UseNavigatorEventHandlersOptions {
     app: App;
     containerRef: RefObject<HTMLDivElement | null>;
+    additionalContainer?: HTMLElement | null;
     setIsNavigatorFocused: Dispatch<SetStateAction<boolean>>;
 }
 
@@ -41,7 +42,12 @@ interface UseNavigatorEventHandlersOptions {
  * This hook consolidates all event subscription logic that was previously
  * in the NotebookNavigatorComponent.
  */
-export function useNavigatorEventHandlers({ app, containerRef, setIsNavigatorFocused }: UseNavigatorEventHandlersOptions) {
+export function useNavigatorEventHandlers({
+    app,
+    containerRef,
+    additionalContainer = null,
+    setIsNavigatorFocused
+}: UseNavigatorEventHandlersOptions) {
     const uiState = useUIState();
     const expansionDispatch = useExpansionDispatch();
     const selectionDispatch = useSelectionDispatch();
@@ -93,8 +99,9 @@ export function useNavigatorEventHandlers({ app, containerRef, setIsNavigatorFoc
             return;
         }
 
-        const container = containerRef.current;
-        if (!container) return;
+        const primaryContainer = containerRef.current;
+        if (!primaryContainer) return;
+        const containers = additionalContainer ? [primaryContainer, additionalContainer] : [primaryContainer];
 
         // Create debounced focus handlers to prevent rapid state changes
         const debouncedSetFocused = debounce((focused: boolean) => {
@@ -107,25 +114,29 @@ export function useNavigatorEventHandlers({ app, containerRef, setIsNavigatorFoc
 
         const handleBlur = (e: FocusEvent) => {
             // Check if focus is moving within the navigator
-            if (e.relatedTarget && container.contains(e.relatedTarget as Node)) {
+            if (e.relatedTarget && containers.some(container => container.contains(e.relatedTarget as Node))) {
                 return;
             }
             debouncedSetFocused(false);
         };
 
-        container.addEventListener('focusin', handleFocus);
-        container.addEventListener('focusout', handleBlur);
+        containers.forEach(container => {
+            container.addEventListener('focusin', handleFocus);
+            container.addEventListener('focusout', handleBlur);
+        });
 
         // Focus the container initially
-        focusElementPreventScroll(container);
+        focusElementPreventScroll(primaryContainer);
 
         return () => {
             // Cancel any pending debounced callback to avoid setState after unmount
             debouncedSetFocused.cancel();
-            container.removeEventListener('focusin', handleFocus);
-            container.removeEventListener('focusout', handleBlur);
+            containers.forEach(container => {
+                container.removeEventListener('focusin', handleFocus);
+                container.removeEventListener('focusout', handleBlur);
+            });
         };
-    }, [containerRef, setIsNavigatorFocused]);
+    }, [additionalContainer, containerRef, setIsNavigatorFocused]);
 
     // Ensure the container has focus when the focused pane changes
     useEffect(() => {
@@ -141,12 +152,12 @@ export function useNavigatorEventHandlers({ app, containerRef, setIsNavigatorFoc
         const isOpeningVersionHistory = commandQueue.isOpeningVersionHistory();
         const isOpeningInNewContext = commandQueue.isOpeningInNewContext();
         if (uiState.focusedPane && !isOpeningVersionHistory && !isOpeningInNewContext) {
-            const container = containerRef.current;
+            const container = uiState.focusedPane === 'files' ? (additionalContainer ?? containerRef.current) : containerRef.current;
             if (!container) {
                 return;
             }
 
             focusElementPreventScroll(container);
         }
-    }, [uiState.focusedPane, containerRef, commandQueue]);
+    }, [additionalContainer, uiState.focusedPane, containerRef, commandQueue]);
 }

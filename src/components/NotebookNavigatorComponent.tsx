@@ -18,6 +18,7 @@
 
 // src/components/NotebookNavigatorComponent.tsx
 import React, { useEffect, useImperativeHandle, forwardRef, useRef, useState, useCallback, useLayoutEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { TFile, TFolder } from 'obsidian';
 import { useExpansionState } from '../context/ExpansionContext';
 import { useSelectionState, useSelectionDispatch, resolvePrimarySelectedFile } from '../context/SelectionContext';
@@ -200,6 +201,7 @@ export const NotebookNavigatorComponent = React.memo(
             uxRef.current = uxPreferences;
         }, [uxPreferences]);
         const orientation: DualPaneOrientation = uiState.effectiveDualPaneOrientation;
+        const shouldDetachListPane = !isMobile && uiState.dualPane && orientation === 'horizontal';
         // Get background mode for desktop layout
         const desktopBackground: BackgroundMode = settings.desktopBackground ?? 'separate';
         const {
@@ -274,6 +276,10 @@ export const NotebookNavigatorComponent = React.memo(
         // keyboard events are captured at the navigator level, not globally.
         // This prevents interference with other Obsidian views (e.g., canvas editor).
         const containerRef = useRef<HTMLDivElement | null>(null);
+        const detachedContainerRef = useRef<HTMLDivElement | null>(null);
+        const [detachedListPaneHost, setDetachedListPaneHost] = useState<HTMLElement | null>(() => plugin.getDetachedListPaneHost());
+
+        useEffect(() => plugin.subscribeDetachedListPaneHost(setDetachedListPaneHost), [plugin]);
 
         const [isNavigatorFocused, setIsNavigatorFocused] = useState(false);
         // Tracks search tokens for highlighting matching tags/properties in navigation pane
@@ -382,10 +388,18 @@ export const NotebookNavigatorComponent = React.memo(
         const paneSize = activeNavigationPane.paneSize;
         const isResizing = activeNavigationPane.isResizing;
         const resizeHandleProps = activeNavigationPane.resizeHandleProps;
+        const isListPaneDetached = shouldDetachListPane && detachedListPaneHost !== null;
+
+        useEffect(() => {
+            runAsyncAction(() => plugin.setDetachedListPaneActive(shouldDetachListPane, horizontalNavigationPane.paneSize));
+        }, [horizontalNavigationPane.paneSize, plugin, shouldDetachListPane]);
 
         // Ref callback that stores the navigator root element
         const containerCallbackRef = useCallback((node: HTMLDivElement | null) => {
             containerRef.current = node;
+        }, []);
+        const detachedContainerCallbackRef = useCallback((node: HTMLDivElement | null) => {
+            detachedContainerRef.current = node;
         }, []);
 
         useEffect(() => {
@@ -492,6 +506,7 @@ export const NotebookNavigatorComponent = React.memo(
 
         // Enable drag and drop only on desktop
         useDragAndDrop(containerRef);
+        useDragAndDrop(detachedContainerRef);
 
         // Switches to navigation pane when dragging starts in single pane mode
         const handleDragActivateNavigation = useCallback(() => {
@@ -530,6 +545,7 @@ export const NotebookNavigatorComponent = React.memo(
         useNavigatorEventHandlers({
             app,
             containerRef,
+            additionalContainer: isListPaneDetached ? detachedListPaneHost : null,
             setIsNavigatorFocused
         });
 
@@ -544,10 +560,11 @@ export const NotebookNavigatorComponent = React.memo(
                 uiDispatch({ type: 'ACTIVATE_PANE', target: pane });
 
                 if (!isOpeningVersionHistory && !isOpeningInNewContext) {
-                    containerRef.current?.focus();
+                    const focusContainer = pane === 'files' && isListPaneDetached ? detachedContainerRef.current : containerRef.current;
+                    focusContainer?.focus();
                 }
             },
-            [commandQueue, uiDispatch]
+            [commandQueue, isListPaneDetached, uiDispatch]
         );
 
         const focusNavigationPaneCallback = useCallback(() => {
@@ -1364,14 +1381,17 @@ export const NotebookNavigatorComponent = React.memo(
 
         // Apply dynamic CSS variables for item heights and font size
         useEffect(() => {
-            if (containerRef.current) {
+            const containers = [containerRef.current, detachedContainerRef.current].filter(
+                (container): container is HTMLDivElement => container !== null
+            );
+            for (const container of containers) {
                 const navItemHeight = settings.navItemHeight;
                 const defaultHeight = NAVPANE_MEASUREMENTS.defaultItemHeight;
                 const defaultFontSize = NAVPANE_MEASUREMENTS.defaultFontSize;
                 const scaleTextWithHeight = settings.navItemHeightScaleText;
 
                 // Get Android font scale for compensation (1 if not on Android or no scaling)
-                const navigatorContainer = containerRef.current.closest('.notebook-navigator');
+                const navigatorContainer = container.closest('.notebook-navigator');
                 const androidFontScale = getAndroidFontScale(navigatorContainer);
 
                 // Calculate font sizes based on item height (default 28px)
@@ -1395,17 +1415,17 @@ export const NotebookNavigatorComponent = React.memo(
                 const compensatedFontSize = fontSize / androidFontScale;
                 const compensatedMobileFontSize = mobileFontSize / androidFontScale;
 
-                containerRef.current.style.setProperty('--nn-setting-nav-item-height', `${navItemHeight}px`);
-                containerRef.current.style.setProperty('--nn-setting-nav-item-height-mobile', `${mobileNavItemHeight}px`);
-                containerRef.current.style.setProperty('--nn-setting-nav-font-size', `${compensatedFontSize}px`);
-                containerRef.current.style.setProperty('--nn-setting-nav-font-size-mobile', `${compensatedMobileFontSize}px`);
-                containerRef.current.style.setProperty('--nn-setting-nav-indent', `${settings.navIndent}px`);
-                containerRef.current.style.setProperty('--nn-nav-root-spacing', `${settings.rootLevelSpacing}px`);
+                container.style.setProperty('--nn-setting-nav-item-height', `${navItemHeight}px`);
+                container.style.setProperty('--nn-setting-nav-item-height-mobile', `${mobileNavItemHeight}px`);
+                container.style.setProperty('--nn-setting-nav-font-size', `${compensatedFontSize}px`);
+                container.style.setProperty('--nn-setting-nav-font-size-mobile', `${compensatedMobileFontSize}px`);
+                container.style.setProperty('--nn-setting-nav-indent', `${settings.navIndent}px`);
+                container.style.setProperty('--nn-nav-root-spacing', `${settings.rootLevelSpacing}px`);
 
                 const featureImageDisplayMeasurements = getFeatureImageDisplayMeasurements(settings.featureImageSize);
                 // This is only the rendered image ceiling.
                 // The image still scales with the row height and content layout until it reaches this max.
-                containerRef.current.style.setProperty('--nn-file-thumbnail-max-size', `${featureImageDisplayMeasurements.listMaxSize}px`);
+                container.style.setProperty('--nn-file-thumbnail-max-size', `${featureImageDisplayMeasurements.listMaxSize}px`);
 
                 // Calculate compact list padding and font sizes based on configured item height
                 const { titleLineHeight } = getListPaneMeasurements(isMobile);
@@ -1420,10 +1440,10 @@ export const NotebookNavigatorComponent = React.memo(
                 const compensatedCompactMobileFontSize = compactMetrics.mobileFontSize / androidFontScale;
 
                 // Apply compact list metrics to CSS custom properties
-                containerRef.current.style.setProperty('--nn-file-padding-vertical-compact', `${compactMetrics.desktopPadding}px`);
-                containerRef.current.style.setProperty('--nn-file-padding-vertical-compact-mobile', `${compactMetrics.mobilePadding}px`);
-                containerRef.current.style.setProperty('--nn-compact-font-size', `${compensatedCompactFontSize}px`);
-                containerRef.current.style.setProperty('--nn-compact-font-size-mobile', `${compensatedCompactMobileFontSize}px`);
+                container.style.setProperty('--nn-file-padding-vertical-compact', `${compactMetrics.desktopPadding}px`);
+                container.style.setProperty('--nn-file-padding-vertical-compact-mobile', `${compactMetrics.mobilePadding}px`);
+                container.style.setProperty('--nn-compact-font-size', `${compensatedCompactFontSize}px`);
+                container.style.setProperty('--nn-compact-font-size-mobile', `${compensatedCompactMobileFontSize}px`);
             }
         }, [
             settings.navItemHeight,
@@ -1433,19 +1453,19 @@ export const NotebookNavigatorComponent = React.memo(
             settings.featureImageSize,
             settings.compactItemHeight,
             settings.compactItemHeightScaleText,
+            detachedListPaneHost,
             isMobile
         ]);
 
         useEffect(() => {
-            if (!containerRef.current) {
-                return;
+            for (const container of [containerRef.current, detachedContainerRef.current]) {
+                container?.style.setProperty('--nn-pane-transition-duration', `${settings.paneTransitionDuration}ms`);
             }
-            containerRef.current.style.setProperty('--nn-pane-transition-duration', `${settings.paneTransitionDuration}ms`);
-        }, [containerRef, settings.paneTransitionDuration]);
+        }, [detachedListPaneHost, settings.paneTransitionDuration]);
 
         // Compute navigation pane style based on orientation and single pane mode
         const navigationPaneStyle = useMemo<React.CSSProperties>(() => {
-            if (uiState.singlePane) {
+            if (uiState.singlePane || isListPaneDetached) {
                 return { width: '100%', height: '100%' };
             }
 
@@ -1454,7 +1474,7 @@ export const NotebookNavigatorComponent = React.memo(
             }
 
             return { width: `${paneSize}px`, height: '100%' };
-        }, [uiState.singlePane, orientation, paneSize, navigationPaneSizing.minSize]);
+        }, [isListPaneDetached, uiState.singlePane, orientation, paneSize, navigationPaneSizing.minSize]);
 
         const shouldRenderSinglePaneCalendar =
             uiState.singlePane &&
@@ -1505,72 +1525,99 @@ export const NotebookNavigatorComponent = React.memo(
             ]
         );
 
+        const listPaneElement = (
+            <ListPane
+                ref={listPaneRef}
+                rootContainerRef={isListPaneDetached ? detachedContainerRef : containerRef}
+                folderDecorationModel={folderDecorationModel}
+                fileItemPillDecorationModel={fileItemPillDecorationModel}
+                fileItemPillOrderModel={fileItemPillOrderModel}
+                onSearchTokensChange={handleSearchTokensChange}
+                onNavigateToFolder={navigateToFolder}
+                onRevealTag={revealTag}
+                onRevealProperty={revealProperty}
+                resizeHandleProps={!uiState.singlePane && !isListPaneDetached ? resizeHandleProps : undefined}
+            />
+        );
+
         return (
-            <div className="nn-scale-wrapper" data-ui-scale={scaleWrapperDataAttr} style={scaleWrapperStyle}>
-                <div
-                    ref={containerCallbackRef}
-                    className={containerClasses.join(' ')}
-                    data-focus-pane={
-                        uiState.singlePane ? (uiState.currentSinglePaneView === 'navigation' ? 'navigation' : 'files') : uiState.focusedPane
-                    }
-                    data-navigator-focused={supportsKeyboardInteractions() ? isNavigatorFocused : 'true'}
-                    data-nav-count-leader-style={settings.navCountLeaderStyle}
-                    tabIndex={-1}
-                    onKeyDown={() => {
-                        // Allow keyboard events to bubble up from child components
-                        // The actual keyboard handling is done in NavigationPane and ListPane
-                    }}
-                >
-                    {settings.checkForUpdatesOnStart && <UpdateNoticeBanner notice={bannerNotice} onDismiss={markAsDisplayed} />}
-                    {/* KEYBOARD EVENT FLOW:
+            <>
+                <div className="nn-scale-wrapper" data-ui-scale={scaleWrapperDataAttr} style={scaleWrapperStyle}>
+                    <div
+                        ref={containerCallbackRef}
+                        className={containerClasses.join(' ')}
+                        data-focus-pane={
+                            uiState.singlePane
+                                ? uiState.currentSinglePaneView === 'navigation'
+                                    ? 'navigation'
+                                    : 'files'
+                                : uiState.focusedPane
+                        }
+                        data-navigator-focused={supportsKeyboardInteractions() ? isNavigatorFocused : 'true'}
+                        data-nav-count-leader-style={settings.navCountLeaderStyle}
+                        tabIndex={-1}
+                        onKeyDown={() => {
+                            // Allow keyboard events to bubble up from child components
+                            // The actual keyboard handling is done in NavigationPane and ListPane
+                        }}
+                    >
+                        {settings.checkForUpdatesOnStart && <UpdateNoticeBanner notice={bannerNotice} onDismiss={markAsDisplayed} />}
+                        {/* KEYBOARD EVENT FLOW:
                 1. Both NavigationPane and ListPane receive the same containerRef
                 2. Each pane sets up keyboard listeners on this shared container
                 3. The listeners check which pane has focus before handling events
                 4. This allows Tab/Arrow navigation between panes while keeping
                    all keyboard events scoped to the navigator container only
             */}
-                    <NavigationPane
-                        ref={navigationPaneRef}
-                        style={navigationPaneStyle}
-                        uiScale={uiScale}
-                        rootContainerRef={containerRef}
-                        navigationSourceState={navigationSourceState}
-                        navigationTreeSections={navigationTreeSections}
-                        folderDecorationModel={folderDecorationModel}
-                        navRainbowState={navRainbowState}
-                        searchNavFilters={searchNavFilters}
-                        onExecuteSearchShortcut={handleSearchShortcutExecution}
-                        onNavigateToFolder={navigateToFolder}
-                        onRevealTag={revealTag}
-                        onRevealProperty={revealProperty}
-                        onRevealFile={revealFileInNearestFolder}
-                        onRevealShortcutFile={handleShortcutNoteReveal}
-                        onModifySearchWithTag={handleModifySearchWithTag}
-                        onModifySearchWithProperty={handleModifySearchWithProperty}
-                        onModifySearchWithDateFilter={handleModifySearchWithDateFilter}
-                    />
-                    <ListPane
-                        ref={listPaneRef}
-                        rootContainerRef={containerRef}
-                        folderDecorationModel={folderDecorationModel}
-                        fileItemPillDecorationModel={fileItemPillDecorationModel}
-                        fileItemPillOrderModel={fileItemPillOrderModel}
-                        onSearchTokensChange={handleSearchTokensChange}
-                        onNavigateToFolder={navigateToFolder}
-                        onRevealTag={revealTag}
-                        onRevealProperty={revealProperty}
-                        resizeHandleProps={!uiState.singlePane ? resizeHandleProps : undefined}
-                    />
-                    {shouldRenderSinglePaneCalendar ? (
-                        <div className="nn-single-pane-calendar">
-                            <Calendar
-                                onWeekCountChange={handleSinglePaneCalendarWeekCountChange}
-                                onAddDateFilter={handleModifySearchWithDateFilter}
-                            />
-                        </div>
-                    ) : null}
+                        <NavigationPane
+                            ref={navigationPaneRef}
+                            style={navigationPaneStyle}
+                            uiScale={uiScale}
+                            rootContainerRef={containerRef}
+                            navigationSourceState={navigationSourceState}
+                            navigationTreeSections={navigationTreeSections}
+                            folderDecorationModel={folderDecorationModel}
+                            navRainbowState={navRainbowState}
+                            searchNavFilters={searchNavFilters}
+                            onExecuteSearchShortcut={handleSearchShortcutExecution}
+                            onNavigateToFolder={navigateToFolder}
+                            onRevealTag={revealTag}
+                            onRevealProperty={revealProperty}
+                            onRevealFile={revealFileInNearestFolder}
+                            onRevealShortcutFile={handleShortcutNoteReveal}
+                            onModifySearchWithTag={handleModifySearchWithTag}
+                            onModifySearchWithProperty={handleModifySearchWithProperty}
+                            onModifySearchWithDateFilter={handleModifySearchWithDateFilter}
+                        />
+                        {!isListPaneDetached ? listPaneElement : null}
+                        {shouldRenderSinglePaneCalendar ? (
+                            <div className="nn-single-pane-calendar">
+                                <Calendar
+                                    onWeekCountChange={handleSinglePaneCalendarWeekCountChange}
+                                    onAddDateFilter={handleModifySearchWithDateFilter}
+                                />
+                            </div>
+                        ) : null}
+                    </div>
                 </div>
-            </div>
+                {isListPaneDetached && detachedListPaneHost
+                    ? createPortal(
+                          <div className="nn-scale-wrapper" data-ui-scale={scaleWrapperDataAttr} style={scaleWrapperStyle}>
+                              <div
+                                  ref={detachedContainerCallbackRef}
+                                  className={`${containerClasses.join(' ')} nn-detached-list-root`}
+                                  data-focus-pane={uiState.focusedPane}
+                                  data-navigator-focused={supportsKeyboardInteractions() ? isNavigatorFocused : 'true'}
+                                  data-nav-count-leader-style={settings.navCountLeaderStyle}
+                                  tabIndex={-1}
+                              >
+                                  {listPaneElement}
+                              </div>
+                          </div>,
+                          detachedListPaneHost
+                      )
+                    : null}
+            </>
         );
     })
 );
