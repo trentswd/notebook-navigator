@@ -351,7 +351,7 @@ export class DetachedListPaneService {
         const doc = this.host.ownerDocument;
         const leftSplitEl = this.getLeftSplitElement(doc);
         if (leftSplitEl) {
-            leftSplitEl.setCssProps({ width: `${Math.round(this.navigationWidth)}px` });
+            this.setElementCssProps(leftSplitEl, { width: `${Math.round(this.navigationWidth)}px` });
         }
 
         if (this.preferredListWidth === null) {
