@@ -835,44 +835,72 @@ body {
 }
 /* Source: src/styles/sections/detached-list-pane.css */
 
-/* Local desktop patch: the horizontal ListPane lives in a dedicated main-workspace leaf. */
-.view-content.notebook-navigator-detached-list-host {
-    padding: 0;
-    border: none;
+/*
+ * Local desktop patch: a DOM-managed companion sidebar for the horizontal
+ * ListPane. It is a direct workspace child and intentionally not a workspace
+ * split or leaf, so Obsidian's pane resize model cannot mutate its geometry.
+ */
+.workspace > .nn-companion-sidebar {
+    position: relative;
+    z-index: var(--layer-sidedock, 5);
+    display: flex;
+    flex: 0 0 var(--nn-companion-sidebar-width, 420px);
+    flex-direction: column;
+    width: var(--nn-companion-sidebar-width, 420px);
+    min-width: 0;
     height: 100%;
     overflow: hidden;
-}
-
-.workspace-leaf-content[data-type='notebook-navigator-detached-list'] > .view-header {
-    display: none;
-}
-
-.workspace-tabs.nn-detached-list-workspace-tabs {
-    min-width: 0;
-    overflow: hidden;
-    transition:
-        width var(--nn-pane-transition-duration, 150ms) ease-in-out,
-        flex-basis var(--nn-pane-transition-duration, 150ms) ease-in-out,
-        opacity var(--nn-pane-transition-duration, 150ms) ease-in-out;
-}
-
-/* Keep the normal top chrome height, but turn it into the uninterrupted grey band from the mock-up. */
-.workspace-tabs.nn-detached-list-workspace-tabs > .workspace-tab-header-container {
+    color: var(--text-normal);
     background: var(--background-secondary);
+    border-right: var(--divider-width, 1px) solid var(--divider-color);
+    opacity: 1;
 }
 
-.workspace-tabs.nn-detached-list-workspace-tabs > .workspace-tab-header-container > * {
-    visibility: hidden;
-    pointer-events: none;
-}
-
-.workspace-split.mod-root > .workspace-tabs.nn-detached-list-workspace-tabs.nn-detached-list-pane-inactive,
-.workspace-split.mod-root > .workspace-tabs.nn-detached-list-workspace-tabs.nn-detached-list-pane-collapsed {
+.workspace > .nn-companion-sidebar.nn-companion-sidebar-hidden {
     width: 0;
-    min-width: 0;
-    flex: 0 0 0;
+    flex-basis: 0;
+    border-right-width: 0;
     opacity: 0;
     pointer-events: none;
+}
+
+.workspace > .nn-companion-sidebar.nn-companion-sidebar-resizing {
+    transition: none;
+    user-select: none;
+}
+
+.nn-companion-sidebar-header {
+    flex: 0 0 var(--header-height);
+    min-height: var(--header-height);
+    background: var(--background-secondary);
+    border-bottom: var(--divider-width, 1px) solid var(--divider-color);
+}
+
+.nn-companion-sidebar-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+    border: none;
+}
+
+.nn-companion-sidebar-resize-handle {
+    position: absolute;
+    z-index: 300;
+    top: 0;
+    right: -2px;
+    bottom: 0;
+    width: 5px;
+    cursor: col-resize;
+    touch-action: none;
+    background: transparent;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.nn-companion-sidebar-resize-handle:hover,
+.nn-companion-sidebar-resizing .nn-companion-sidebar-resize-handle {
+    background: var(--divider-color-hover, var(--interactive-accent));
 }
 
 .notebook-navigator-detached-list-host .nn-scale-wrapper,

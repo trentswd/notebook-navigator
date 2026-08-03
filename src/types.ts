@@ -274,6 +274,7 @@ export interface LocalStorageKeys {
     selectedTagKey: string;
     navigationPaneWidthKey: string;
     navigationPaneHeightKey: string;
+    detachedListPaneWidthKey: string;
     dualPaneOrientationKey: string;
     narrowSidebarLayoutKey: string;
     narrowSidebarTriggerModeKey: string;
@@ -340,6 +341,7 @@ export const STORAGE_KEYS: LocalStorageKeys = {
     selectedTagKey: 'notebook-navigator-selected-tag',
     navigationPaneWidthKey: 'notebook-navigator-navigation-pane-width',
     navigationPaneHeightKey: 'notebook-navigator-navigation-pane-height',
+    detachedListPaneWidthKey: 'notebook-navigator-detached-list-pane-width',
     dualPaneOrientationKey: 'notebook-navigator-dual-pane-orientation',
     narrowSidebarLayoutKey: 'notebook-navigator-narrow-sidebar-layout',
     narrowSidebarTriggerModeKey: 'notebook-navigator-narrow-sidebar-trigger-mode',

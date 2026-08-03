@@ -2,13 +2,13 @@
  * Notebook Navigator - Plugin for Obsidian
  * Copyright (c) 2025-2026 Johan Sanneblad
  *
- * Local patch: host the horizontal desktop list pane in a main-workspace leaf.
+ * Local patch: host the horizontal desktop list pane in a companion sidebar.
  */
 
-import { EventRef, WorkspaceLeaf } from 'obsidian';
+import { EventRef } from 'obsidian';
 import type NotebookNavigatorPlugin from '../../main';
 import { NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW } from '../../types';
-import { getLeafSplitLocation } from '../../utils/workspaceSplit';
+import { localStorage } from '../../utils/localStorage';
 
 type HostListener = (host: HTMLElement | null) => void;
 
@@ -16,49 +16,92 @@ const DEFAULT_LIST_WIDTH = 420;
 const MIN_LIST_WIDTH = 250;
 const MIN_EDITOR_WIDTH = 320;
 
+/**
+ * Provides a second left-sidebar surface for the horizontal desktop layout.
+ *
+ * The companion is deliberately a plain DOM child of `.workspace`, not a
+ * WorkspaceLeaf. Obsidian therefore never includes it in root-split resize,
+ * leaf restoration, or drag/drop calculations.
+ */
 export class DetachedListPaneService {
     private readonly plugin: NotebookNavigatorPlugin;
     private host: HTMLElement | null = null;
-    private tabsContainer: HTMLElement | null = null;
+    private companion: HTMLElement | null = null;
+    private resizeHandle: HTMLElement | null = null;
     private listeners = new Set<HostListener>();
     private layoutEventRef: EventRef | null = null;
     private workspaceObserver: MutationObserver | null = null;
     private requestedActive = false;
     private navigationWidth = 300;
-    private originalCombinedWidth: number | null = null;
-    private createdLeafThisSession = false;
-    private detachedLeaf: WorkspaceLeaf | null = null;
-    private ensurePromise: Promise<void> | null = null;
-    private geometryTimer: number | null = null;
-    private geometryAttempts = 0;
+    private preferredListWidth = DEFAULT_LIST_WIDTH;
     private disposed = false;
-    private preferredListWidth: number | null = null;
     private hostWindow: Window | null = null;
-    private readonly handlePointerUp = (): void => this.captureCurrentListWidth();
-    private expandedGeometry: {
-        width: string;
-        minWidth: string;
-        flexGrow: string;
-        flexShrink: string;
-        flexBasis: string;
-    } | null = null;
+    private resizePointerId: number | null = null;
+    private resizeStartX = 0;
+    private resizeStartWidth = 0;
+    private resizeMaxWidth = DEFAULT_LIST_WIDTH;
+    private adjustedLeftSplit: HTMLElement | null = null;
+    private originalLeftSplitInlineWidth: string | null = null;
+    private originalLeftSplitWidth: number | null = null;
+
+    private readonly handlePointerMove = (event: PointerEvent): void => {
+        if (event.pointerId !== this.resizePointerId || !this.companion) {
+            return;
+        }
+        const nextWidth = this.clampListWidth(this.resizeStartWidth + event.clientX - this.resizeStartX, this.resizeMaxWidth);
+        this.preferredListWidth = nextWidth;
+        this.applyListWidth(nextWidth);
+        event.preventDefault();
+    };
+
+    private readonly handlePointerUp = (event: PointerEvent): void => {
+        if (event.pointerId !== this.resizePointerId) {
+            return;
+        }
+        this.finishResize(true);
+        event.preventDefault();
+    };
+
+    private readonly handlePointerCancel = (event: PointerEvent): void => {
+        if (event.pointerId !== this.resizePointerId) {
+            return;
+        }
+        this.finishResize(false);
+    };
 
     constructor(plugin: NotebookNavigatorPlugin) {
         this.plugin = plugin;
+        const storedWidth = localStorage.get<unknown>(plugin.keys.detachedListPaneWidthKey);
+        if (typeof storedWidth === 'number' && Number.isFinite(storedWidth) && storedWidth >= MIN_LIST_WIDTH) {
+            this.preferredListWidth = Math.round(storedWidth);
+        }
     }
 
     start(): void {
         if (this.layoutEventRef) {
             return;
         }
+
         this.layoutEventRef = this.plugin.app.workspace.on('layout-change', () => {
+            this.detachLegacyLeaves();
+            this.ensurePlacement();
             this.syncVisibility();
         });
+
         const workspaceEl = activeDocument.querySelector<HTMLElement>('.workspace');
         if (workspaceEl) {
-            this.workspaceObserver = new MutationObserver(() => this.syncVisibility());
-            this.workspaceObserver.observe(workspaceEl, { attributes: true, attributeFilter: ['class'] });
+            this.workspaceObserver = new MutationObserver(() => {
+                this.ensurePlacement();
+                this.syncVisibility();
+            });
+            this.workspaceObserver.observe(workspaceEl, {
+                attributes: true,
+                attributeFilter: ['class'],
+                childList: true
+            });
         }
+
+        this.detachLegacyLeaves();
     }
 
     dispose(): void {
@@ -69,21 +112,10 @@ export class DetachedListPaneService {
         }
         this.workspaceObserver?.disconnect();
         this.workspaceObserver = null;
-        this.hostWindow?.removeEventListener('pointerup', this.handlePointerUp, true);
-        this.hostWindow = null;
+        this.finishResize(false);
+        this.restoreLeftSplitWidth();
+        this.removeCompanion();
         this.listeners.clear();
-        if (this.geometryTimer !== null) {
-            window.clearTimeout(this.geometryTimer);
-            this.geometryTimer = null;
-        }
-        this.host = null;
-        this.tabsContainer = null;
-        this.expandedGeometry = null;
-        const leafToDetach = this.detachedLeaf;
-        this.detachedLeaf = null;
-        if (leafToDetach) {
-            window.setTimeout(() => leafToDetach.detach(), 0);
-        }
     }
 
     getHost(): HTMLElement | null {
@@ -96,54 +128,33 @@ export class DetachedListPaneService {
         return () => this.listeners.delete(listener);
     }
 
-    attachHost(host: HTMLElement, tabsContainer: HTMLElement | null): void {
-        this.host = host;
-        this.tabsContainer = tabsContainer;
-        tabsContainer?.classList.add('nn-detached-list-workspace-tabs');
-        this.hostWindow?.removeEventListener('pointerup', this.handlePointerUp, true);
-        this.hostWindow = host.ownerDocument.defaultView;
-        this.hostWindow?.addEventListener('pointerup', this.handlePointerUp, true);
-        this.notifyHostListeners();
-        this.configureGeometry();
-        this.syncVisibility();
+    /**
+     * Compatibility hook for layouts saved by earlier revisions of this fork.
+     * Legacy detached views are removed instead of becoming the portal host.
+     */
+    attachHost(_host: HTMLElement, _tabsContainer: HTMLElement | null): void {
+        this.detachLegacyLeaves();
     }
 
-    detachHost(host: HTMLElement): void {
-        if (this.host !== host) {
-            return;
-        }
-        if (this.geometryTimer !== null) {
-            window.clearTimeout(this.geometryTimer);
-            this.geometryTimer = null;
-        }
-        this.tabsContainer?.classList.remove(
-            'nn-detached-list-workspace-tabs',
-            'nn-detached-list-pane-collapsed',
-            'nn-detached-list-pane-inactive'
-        );
-        this.hostWindow?.removeEventListener('pointerup', this.handlePointerUp, true);
-        this.hostWindow = null;
-        this.host = null;
-        this.tabsContainer = null;
-        this.expandedGeometry = null;
-        this.notifyHostListeners();
+    /** Compatibility hook paired with attachHost(). */
+    detachHost(_host: HTMLElement): void {
+        // The companion host has an independent lifecycle.
     }
 
     async setActive(active: boolean, navigationWidth: number): Promise<void> {
         this.requestedActive = active;
         if (Number.isFinite(navigationWidth) && navigationWidth > 0) {
-            this.navigationWidth = navigationWidth;
+            this.navigationWidth = Math.round(navigationWidth);
         }
 
-        if (!active) {
-            this.syncVisibility();
-            return;
+        if (active) {
+            this.ensureCompanion();
+            this.applyNavigationWidth();
+            this.detachLegacyLeaves();
+        } else {
+            this.restoreLeftSplitWidth();
         }
-
-        this.captureCombinedWidth();
-        await this.ensureLeaf();
         this.syncVisibility();
-        this.configureGeometry();
     }
 
     private notifyHostListeners(): void {
@@ -152,227 +163,221 @@ export class DetachedListPaneService {
         }
     }
 
+    private getWorkspaceElement(doc: Document = activeDocument): HTMLElement | null {
+        return doc.querySelector<HTMLElement>('.workspace');
+    }
+
     private getLeftSplitElement(doc: Document = activeDocument): HTMLElement | null {
-        return doc.querySelector<HTMLElement>('.workspace-split.mod-left-split');
+        return doc.querySelector<HTMLElement>('.workspace > .workspace-split.mod-left-split');
     }
 
-    private captureCombinedWidth(): void {
-        if (this.originalCombinedWidth !== null) {
+    private getRootSplitElement(doc: Document = activeDocument): HTMLElement | null {
+        return doc.querySelector<HTMLElement>('.workspace > .workspace-split.mod-root');
+    }
+
+    private ensureCompanion(): void {
+        if (this.disposed) {
             return;
         }
-        const leftSplitEl = this.getLeftSplitElement();
-        const width = leftSplitEl?.getBoundingClientRect().width ?? 0;
-        if (width > this.navigationWidth) {
-            this.originalCombinedWidth = width;
-        }
-    }
 
-    private findMainTargetLeaf(): WorkspaceLeaf | null {
-        const { workspace } = this.plugin.app;
-        const recent = workspace.getMostRecentLeaf(workspace.rootSplit);
-        if (recent && recent.getViewState().type !== NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW) {
-            return recent;
+        const doc = activeDocument;
+        const workspaceEl = this.getWorkspaceElement(doc);
+        const rootSplitEl = this.getRootSplitElement(doc);
+        if (!workspaceEl || !rootSplitEl) {
+            return;
         }
 
-        let target: WorkspaceLeaf | null = null;
-        workspace.iterateAllLeaves(leaf => {
-            if (
-                !target &&
-                getLeafSplitLocation(this.plugin.app, leaf) === 'main' &&
-                leaf.getViewState().type !== NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW
-            ) {
-                target = leaf;
+        if (this.companion?.isConnected && this.companion.parentElement === workspaceEl) {
+            if (this.companion.nextElementSibling !== rootSplitEl) {
+                workspaceEl.insertBefore(this.companion, rootSplitEl);
             }
-        });
-        return target;
-    }
-
-    private async ensureLeaf(): Promise<void> {
-        if (this.disposed || !this.requestedActive) {
-            return;
-        }
-        if (this.ensurePromise) {
-            await this.ensurePromise;
             return;
         }
 
-        this.ensurePromise = this.ensureLeafInternal();
-        try {
-            await this.ensurePromise;
-        } finally {
-            this.ensurePromise = null;
-        }
-    }
+        this.removeCompanion();
 
-    private async ensureLeafInternal(): Promise<void> {
-        const { workspace } = this.plugin.app;
-        const existing = workspace.getLeavesOfType(NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW)[0] ?? null;
-        if (existing) {
-            this.detachedLeaf = existing;
-            await existing.loadIfDeferred();
-            return;
-        }
+        const companion = doc.win.createDiv({ cls: 'nn-companion-sidebar nn-companion-sidebar-inactive' });
+        companion.setAttribute('role', 'complementary');
+        companion.setAttribute('aria-label', 'Notebook navigator files');
 
-        const target = this.findMainTargetLeaf();
-        if (!target) {
-            return;
-        }
+        const header = doc.win.createDiv({ cls: 'nn-companion-sidebar-header' });
+        header.setAttribute('aria-hidden', 'true');
 
-        const previouslyActive = workspace.getMostRecentLeaf(workspace.rootSplit);
-        const leaf = workspace.createLeafBySplit(target, 'vertical', true);
-        this.detachedLeaf = leaf;
-        this.createdLeafThisSession = true;
-        await leaf.setViewState({
-            type: NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW,
-            active: false
+        const host = doc.win.createDiv({
+            cls: 'nn-companion-sidebar-content notebook-navigator notebook-navigator-detached-list-host'
         });
 
-        if (previouslyActive && previouslyActive !== leaf) {
-            workspace.setActiveLeaf(previouslyActive, { focus: false });
-        }
-        workspace.requestSaveLayout();
+        const resizeHandle = doc.win.createDiv({ cls: 'nn-companion-sidebar-resize-handle' });
+        resizeHandle.setAttribute('role', 'separator');
+        resizeHandle.setAttribute('aria-orientation', 'vertical');
+        resizeHandle.setAttribute('aria-label', 'Resize notebook navigator files');
+        resizeHandle.addEventListener('pointerdown', event => this.startResize(event));
+
+        companion.append(header, host, resizeHandle);
+        companion.style.setProperty('--nn-companion-sidebar-width', `${this.preferredListWidth}px`);
+        workspaceEl.insertBefore(companion, rootSplitEl);
+
+        this.companion = companion;
+        this.host = host;
+        this.resizeHandle = resizeHandle;
+        this.hostWindow = doc.defaultView;
+        this.notifyHostListeners();
     }
 
-    private configureGeometry(): void {
-        if (!this.requestedActive || !this.host || !this.tabsContainer) {
+    private ensurePlacement(): void {
+        if (!this.requestedActive) {
+            return;
+        }
+        this.ensureCompanion();
+        const companion = this.companion;
+        const rootSplitEl = companion ? this.getRootSplitElement(companion.ownerDocument) : null;
+        if (companion && rootSplitEl && companion.nextElementSibling !== rootSplitEl) {
+            rootSplitEl.parentElement?.insertBefore(companion, rootSplitEl);
+        }
+    }
+
+    private removeCompanion(): void {
+        if (this.host) {
+            this.host = null;
+            this.notifyHostListeners();
+        }
+        this.companion?.remove();
+        this.companion = null;
+        this.resizeHandle = null;
+        this.hostWindow = null;
+    }
+
+    private applyNavigationWidth(): void {
+        const companionDoc = this.companion?.ownerDocument ?? activeDocument;
+        const leftSplitEl = this.getLeftSplitElement(companionDoc);
+        if (!leftSplitEl) {
             return;
         }
 
-        const doc = this.host.ownerDocument;
-        const leftSplitEl = this.getLeftSplitElement(doc);
-        if (leftSplitEl) {
-            leftSplitEl.setCssProps({ width: `${Math.round(this.navigationWidth)}px` });
+        if (this.adjustedLeftSplit !== leftSplitEl) {
+            this.restoreLeftSplitWidth();
+            this.adjustedLeftSplit = leftSplitEl;
+            this.originalLeftSplitInlineWidth = leftSplitEl.style.width;
+            this.originalLeftSplitWidth = Math.round(leftSplitEl.getBoundingClientRect().width);
         }
 
-        if (this.preferredListWidth === null) {
-            const inlineWidth = Number.parseFloat(this.tabsContainer.style.width);
-            const actualWidth = this.tabsContainer.getBoundingClientRect().width;
-            const capturedListWidth = this.createdLeafThisSession
-                ? this.originalCombinedWidth === null
-                    ? DEFAULT_LIST_WIDTH
-                    : Math.max(MIN_LIST_WIDTH, this.originalCombinedWidth - this.navigationWidth)
-                : inlineWidth >= MIN_LIST_WIDTH
-                  ? inlineWidth
-                  : actualWidth >= MIN_LIST_WIDTH
-                    ? actualWidth
-                    : DEFAULT_LIST_WIDTH;
-            this.preferredListWidth = Math.round(capturedListWidth);
-        }
-
-        const targetWidth = this.setFixedListWidth(this.preferredListWidth);
-        if (this.createdLeafThisSession) {
-            this.scheduleGeometryVerification(targetWidth);
-        }
+        leftSplitEl.style.width = `${this.navigationWidth}px`;
     }
 
-    private setFixedListWidth(requestedWidth: number): number {
-        const tabsContainer = this.tabsContainer;
-        const rootSplit = tabsContainer?.parentElement;
-        if (!tabsContainer || !rootSplit) {
-            return requestedWidth;
-        }
-
-        const availableWidth = rootSplit.getBoundingClientRect().width;
-        const targetWidth = Math.min(requestedWidth, Math.max(MIN_LIST_WIDTH, availableWidth - MIN_EDITOR_WIDTH));
-        this.setTabsCssProps({
-            width: `${Math.round(targetWidth)}px`,
-            'min-width': `${MIN_LIST_WIDTH}px`,
-            'flex-grow': '0',
-            'flex-shrink': '0',
-            'flex-basis': `${Math.round(targetWidth)}px`
-        });
-        return targetWidth;
-    }
-
-    private captureCurrentListWidth(): void {
-        const tabsContainer = this.tabsContainer;
-        if (
-            !this.requestedActive ||
-            !tabsContainer ||
-            tabsContainer.classList.contains('nn-detached-list-pane-inactive') ||
-            tabsContainer.classList.contains('nn-detached-list-pane-collapsed')
-        ) {
+    private restoreLeftSplitWidth(): void {
+        const leftSplitEl = this.adjustedLeftSplit;
+        if (!leftSplitEl) {
             return;
         }
 
-        const width = Math.round(tabsContainer.getBoundingClientRect().width);
-        if (width < MIN_LIST_WIDTH) {
-            return;
+        if (this.originalLeftSplitInlineWidth) {
+            leftSplitEl.style.width = this.originalLeftSplitInlineWidth;
+        } else if (this.originalLeftSplitWidth && this.originalLeftSplitWidth > 0) {
+            leftSplitEl.style.width = `${this.originalLeftSplitWidth}px`;
+        } else {
+            leftSplitEl.style.removeProperty('width');
         }
-        this.preferredListWidth = width;
-        this.setFixedListWidth(width);
-        this.plugin.app.workspace.requestSaveLayout();
+
+        this.adjustedLeftSplit = null;
+        this.originalLeftSplitInlineWidth = null;
+        this.originalLeftSplitWidth = null;
     }
 
-    private scheduleGeometryVerification(targetWidth: number): void {
-        if (this.geometryTimer !== null) {
+    private startResize(event: PointerEvent): void {
+        if (event.button !== 0 || !this.companion || this.companion.classList.contains('nn-companion-sidebar-hidden')) {
             return;
         }
-        this.geometryTimer = window.setTimeout(() => {
-            this.geometryTimer = null;
-            if (!this.createdLeafThisSession || !this.tabsContainer || !this.requestedActive) {
-                return;
-            }
 
-            this.geometryAttempts += 1;
-            const actualWidth = this.tabsContainer.getBoundingClientRect().width;
-            if (Math.abs(actualWidth - targetWidth) <= 8 || this.geometryAttempts >= 10) {
-                this.createdLeafThisSession = false;
-                this.geometryAttempts = 0;
-                return;
-            }
-            this.configureGeometry();
-        }, 50);
+        const hostWindow = this.hostWindow;
+        const rootSplitEl = this.getRootSplitElement(this.companion.ownerDocument);
+        if (!hostWindow || !rootSplitEl) {
+            return;
+        }
+
+        this.finishResize(false);
+        this.resizePointerId = event.pointerId;
+        this.resizeStartX = event.clientX;
+        this.resizeStartWidth = this.companion.getBoundingClientRect().width;
+        this.resizeMaxWidth = Math.max(
+            MIN_LIST_WIDTH,
+            this.resizeStartWidth + rootSplitEl.getBoundingClientRect().width - MIN_EDITOR_WIDTH
+        );
+        this.companion.classList.add('nn-companion-sidebar-resizing');
+        this.resizeHandle?.setAttribute('aria-valuenow', `${Math.round(this.resizeStartWidth)}`);
+        hostWindow.addEventListener('pointermove', this.handlePointerMove, true);
+        hostWindow.addEventListener('pointerup', this.handlePointerUp, true);
+        hostWindow.addEventListener('pointercancel', this.handlePointerCancel, true);
+        event.preventDefault();
+        event.stopPropagation();
     }
 
-    private setTabsCssProps(properties: Record<string, string>): void {
-        this.tabsContainer?.setCssProps(properties);
+    private finishResize(persist: boolean): void {
+        const hostWindow = this.hostWindow;
+        hostWindow?.removeEventListener('pointermove', this.handlePointerMove, true);
+        hostWindow?.removeEventListener('pointerup', this.handlePointerUp, true);
+        hostWindow?.removeEventListener('pointercancel', this.handlePointerCancel, true);
+        this.resizePointerId = null;
+        this.companion?.classList.remove('nn-companion-sidebar-resizing');
+
+        if (persist) {
+            localStorage.set(this.plugin.keys.detachedListPaneWidthKey, Math.round(this.preferredListWidth));
+        }
+    }
+
+    private clampListWidth(requestedWidth: number, maxWidth = Number.POSITIVE_INFINITY): number {
+        return Math.round(Math.min(Math.max(requestedWidth, MIN_LIST_WIDTH), Math.max(MIN_LIST_WIDTH, maxWidth)));
+    }
+
+    private getAvailableListWidth(): number {
+        const companion = this.companion;
+        const rootSplitEl = companion ? this.getRootSplitElement(companion.ownerDocument) : null;
+        if (!companion || !rootSplitEl) {
+            return this.preferredListWidth;
+        }
+        return Math.max(
+            MIN_LIST_WIDTH,
+            companion.getBoundingClientRect().width + rootSplitEl.getBoundingClientRect().width - MIN_EDITOR_WIDTH
+        );
+    }
+
+    private applyListWidth(width: number): void {
+        this.companion?.style.setProperty('--nn-companion-sidebar-width', `${Math.round(width)}px`);
+        this.resizeHandle?.setAttribute('aria-valuenow', `${Math.round(width)}`);
     }
 
     private syncVisibility(): void {
-        const tabsContainer = this.tabsContainer;
-        if (!tabsContainer) {
+        const companion = this.companion;
+        if (!companion) {
             return;
         }
 
         const leftCollapsed = this.plugin.app.workspace.leftSplit.collapsed;
         const inactive = !this.requestedActive;
         const collapsed = this.requestedActive && leftCollapsed;
-        const shouldHide = inactive || collapsed;
-        const wasHidden =
-            tabsContainer.classList.contains('nn-detached-list-pane-inactive') ||
-            tabsContainer.classList.contains('nn-detached-list-pane-collapsed');
+        const hidden = inactive || collapsed;
 
-        if (shouldHide) {
-            if (!wasHidden) {
-                this.expandedGeometry = {
-                    width: tabsContainer.style.width,
-                    minWidth: tabsContainer.style.minWidth,
-                    flexGrow: tabsContainer.style.flexGrow,
-                    flexShrink: tabsContainer.style.flexShrink,
-                    flexBasis: tabsContainer.style.flexBasis
-                };
-            }
-            this.setTabsCssProps({
-                width: '0px',
-                'min-width': '0px',
-                'flex-grow': '0',
-                'flex-shrink': '0',
-                'flex-basis': '0px'
-            });
-        } else if (!shouldHide && wasHidden) {
-            const geometry = this.expandedGeometry;
-            this.setTabsCssProps({
-                width: geometry?.width ?? '',
-                'min-width': geometry?.minWidth ?? '',
-                'flex-grow': geometry?.flexGrow ?? '',
-                'flex-shrink': geometry?.flexShrink ?? '',
-                'flex-basis': geometry?.flexBasis ?? ''
-            });
-            this.expandedGeometry = null;
+        if (!hidden) {
+            this.applyListWidth(this.clampListWidth(this.preferredListWidth, this.getAvailableListWidth()));
         }
+        companion.style.setProperty('--nn-pane-transition-duration', `${this.plugin.settings.paneTransitionDuration}ms`);
+        companion.classList.toggle('nn-companion-sidebar-inactive', inactive);
+        companion.classList.toggle('nn-companion-sidebar-collapsed', collapsed);
+        companion.classList.toggle('nn-companion-sidebar-hidden', hidden);
+        companion.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+        companion.toggleAttribute('inert', hidden);
+    }
 
-        tabsContainer.classList.toggle('nn-detached-list-pane-inactive', inactive);
-        tabsContainer.classList.toggle('nn-detached-list-pane-collapsed', collapsed);
+    private detachLegacyLeaves(): void {
+        const leaves = this.plugin.app.workspace.getLeavesOfType(NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW);
+        if (leaves.length === 0) {
+            return;
+        }
+        const hostWindow = this.hostWindow ?? activeWindow;
+        hostWindow.setTimeout(() => {
+            for (const leaf of leaves) {
+                leaf.detach();
+            }
+            this.plugin.app.workspace.requestSaveLayout();
+        }, 0);
     }
 }
