@@ -1,0 +1,85 @@
+/* Source: src/styles/sections/detached-list-pane.css */
+
+/*
+ * Local desktop patch: a DOM-managed companion sidebar for the horizontal
+ * ListPane. It is a direct workspace child and intentionally not a workspace
+ * split or leaf, so Obsidian's pane resize model cannot mutate its geometry.
+ */
+.workspace > .nn-companion-sidebar {
+    position: relative;
+    z-index: var(--layer-sidedock, 5);
+    display: flex;
+    flex: 0 0 var(--nn-companion-sidebar-width, 420px);
+    flex-direction: column;
+    width: var(--nn-companion-sidebar-width, 420px);
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    color: var(--text-normal);
+    background: var(--background-secondary);
+    border-right: var(--divider-width, 1px) solid var(--divider-color);
+    opacity: 1;
+}
+
+.workspace > .nn-companion-sidebar.nn-companion-sidebar-hidden {
+    width: 0;
+    flex-basis: 0;
+    border-right-width: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.workspace > .nn-companion-sidebar.nn-companion-sidebar-resizing {
+    transition: none;
+    user-select: none;
+}
+
+.nn-companion-sidebar-header {
+    flex: 0 0 var(--header-height);
+    min-height: var(--header-height);
+    background: var(--background-secondary);
+    border-bottom: var(--divider-width, 1px) solid var(--divider-color);
+}
+
+.nn-companion-sidebar-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+    border: none;
+}
+
+.nn-companion-sidebar-resize-handle {
+    position: absolute;
+    z-index: 300;
+    top: 0;
+    right: -2px;
+    bottom: 0;
+    width: 5px;
+    cursor: col-resize;
+    touch-action: none;
+    background: transparent;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.nn-companion-sidebar-resize-handle:hover,
+.nn-companion-sidebar-resizing .nn-companion-sidebar-resize-handle {
+    background: var(--divider-color-hover, var(--interactive-accent));
+}
+
+.notebook-navigator-detached-list-host .nn-scale-wrapper,
+.notebook-navigator-detached-list-host .nn-detached-list-root {
+    width: 100%;
+    height: 100%;
+}
+
+.nn-detached-list-root {
+    min-width: 0;
+}
+
+.nn-detached-list-root .nn-list-pane {
+    width: 100%;
+    min-width: 0;
+}
+

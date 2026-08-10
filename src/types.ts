@@ -31,6 +31,13 @@ import type { CSSProperties } from 'react';
 export const NOTEBOOK_NAVIGATOR_VIEW = 'notebook-navigator';
 
 /**
+ * Auxiliary desktop view used by the local detached-list patch.
+ * The view only owns a workspace leaf; the actual ListPane is rendered into it
+ * through a React portal from the primary Notebook Navigator React tree.
+ */
+export const NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW = 'notebook-navigator-detached-list';
+
+/**
  * Unique identifier for the Notebook Navigator calendar view type.
  * Used by Obsidian to register and manage the right sidebar calendar view.
  */
@@ -267,6 +274,7 @@ export interface LocalStorageKeys {
     selectedTagKey: string;
     navigationPaneWidthKey: string;
     navigationPaneHeightKey: string;
+    detachedListPaneWidthKey: string;
     dualPaneOrientationKey: string;
     narrowSidebarLayoutKey: string;
     narrowSidebarTriggerModeKey: string;
@@ -334,6 +342,7 @@ export const STORAGE_KEYS: LocalStorageKeys = {
     selectedTagKey: 'notebook-navigator-selected-tag',
     navigationPaneWidthKey: 'notebook-navigator-navigation-pane-width',
     navigationPaneHeightKey: 'notebook-navigator-navigation-pane-height',
+    detachedListPaneWidthKey: 'notebook-navigator-detached-list-pane-width',
     dualPaneOrientationKey: 'notebook-navigator-dual-pane-orientation',
     narrowSidebarLayoutKey: 'notebook-navigator-narrow-sidebar-layout',
     narrowSidebarTriggerModeKey: 'notebook-navigator-narrow-sidebar-trigger-mode',

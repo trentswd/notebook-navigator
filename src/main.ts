@@ -23,6 +23,7 @@ import type { NarrowSidebarLayout, NarrowSidebarTriggerMode } from './settings/t
 import {
     LocalStorageKeys,
     NOTEBOOK_NAVIGATOR_CALENDAR_VIEW,
+    NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW,
     NOTEBOOK_NAVIGATOR_FOLDER_NOTE_SIDEBAR_VIEW,
     NOTEBOOK_NAVIGATOR_VIEW,
     STORAGE_KEYS,
@@ -59,6 +60,7 @@ import { runAsyncAction } from './utils/async';
 import WorkspaceCoordinator from './services/workspace/WorkspaceCoordinator';
 import HomepageController from './services/workspace/HomepageController';
 import { FolderNoteSidebarService } from './services/workspace/FolderNoteSidebarService';
+import { DetachedListPaneService } from './services/workspace/DetachedListPaneService';
 import registerWorkspaceEvents from './services/workspace/registerWorkspaceEvents';
 import registerNavigatorCommands from './services/commands/registerNavigatorCommands';
 import type { RevealFileOptions } from './hooks/useNavigatorReveal';
@@ -165,6 +167,7 @@ export default class NotebookNavigatorPlugin extends Plugin implements ISettings
     // Handles homepage file opening and startup behavior
     private homepageController: HomepageController | null = null;
     private folderNoteSidebarService: FolderNoteSidebarService | null = null;
+    private detachedListPaneService: DetachedListPaneService | null = null;
     private settingTab: LazyNotebookNavigatorSettingTab | null = null;
     private pendingUpdateNotice: ReleaseUpdateNotice | null = null;
     private hasWorkspaceLayoutReady = false;
@@ -703,6 +706,8 @@ export default class NotebookNavigatorPlugin extends Plugin implements ISettings
         // Initialize workspace and homepage coordination
         this.workspaceCoordinator = new WorkspaceCoordinator(this);
         this.homepageController = new HomepageController(this, this.workspaceCoordinator);
+        this.detachedListPaneService = new DetachedListPaneService(this);
+        this.detachedListPaneService.start();
 
         // Initialize services
         this.tagTreeService = new TagTreeService();
@@ -771,6 +776,12 @@ export default class NotebookNavigatorPlugin extends Plugin implements ISettings
             // eslint-disable-next-line @typescript-eslint/no-require-imports -- Obsidian registerView callbacks must construct views synchronously.
             const { NotebookNavigatorView } = require('./view/NotebookNavigatorView') as typeof import('./view/NotebookNavigatorView');
             return new NotebookNavigatorView(leaf, this);
+        });
+        this.registerView(NOTEBOOK_NAVIGATOR_DETACHED_LIST_VIEW, leaf => {
+            const { NotebookNavigatorDetachedListView } =
+                // eslint-disable-next-line @typescript-eslint/no-require-imports -- Obsidian registerView callbacks must construct views synchronously.
+                require('./view/NotebookNavigatorDetachedListView') as typeof import('./view/NotebookNavigatorDetachedListView');
+            return new NotebookNavigatorDetachedListView(leaf, this);
         });
         this.registerView(NOTEBOOK_NAVIGATOR_CALENDAR_VIEW, leaf => {
             const { NotebookNavigatorCalendarView } =
@@ -888,6 +899,26 @@ export default class NotebookNavigatorPlugin extends Plugin implements ISettings
      */
     public useDualPane(): boolean {
         return this.preferencesController.useDualPane();
+    }
+
+    public getDetachedListPaneHost(): HTMLElement | null {
+        return this.detachedListPaneService?.getHost() ?? null;
+    }
+
+    public subscribeDetachedListPaneHost(listener: (host: HTMLElement | null) => void): () => void {
+        return this.detachedListPaneService?.subscribe(listener) ?? (() => undefined);
+    }
+
+    public attachDetachedListPaneHost(host: HTMLElement, tabsContainer: HTMLElement | null): void {
+        this.detachedListPaneService?.attachHost(host, tabsContainer);
+    }
+
+    public detachDetachedListPaneHost(host: HTMLElement): void {
+        this.detachedListPaneService?.detachHost(host);
+    }
+
+    public async setDetachedListPaneActive(active: boolean, navigationWidth: number): Promise<void> {
+        await this.detachedListPaneService?.setActive(active, navigationWidth);
     }
 
     public isShuttingDown(): boolean {
@@ -1406,6 +1437,9 @@ export default class NotebookNavigatorPlugin extends Plugin implements ISettings
 
         this.folderNoteSidebarService?.dispose();
         this.folderNoteSidebarService = null;
+
+        this.detachedListPaneService?.dispose();
+        this.detachedListPaneService = null;
 
         // Clear all listeners first to prevent any callbacks during cleanup
         this.settingsUpdateListeners.clear();

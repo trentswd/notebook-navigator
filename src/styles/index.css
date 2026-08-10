@@ -34,6 +34,8 @@ Keep this list ordered: later files override earlier ones.
 @import './sections/ui-notices.css';
 /* layout-panes.css: pane sizing and orientation (`.nn-navigation-pane`, `.nn-list-pane`), background modes, resize handle. */
 @import './sections/layout-panes.css';
+/* detached-list-pane.css: local desktop patch that hosts the horizontal list pane in a companion sidebar. */
+@import './sections/detached-list-pane.css';
 /* ui-headers.css: pane headers, breadcrumb/profile header, search bar container + input, tag suggestion popover. */
 @import './sections/ui-headers.css';
 /* ui-search.css: mobile search overrides, clear/star buttons, clickable header path segments. */
